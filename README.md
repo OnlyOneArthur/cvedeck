@@ -56,7 +56,31 @@ TUI keys:
 | `r` | Synchronize |
 | `o` | Open selected authoritative/original URL |
 | `y` | Copy selected URL |
-| `q` | Quit |
+| `q` | Quit (also inside previews/help; ordinary text in inputs) |
+| `j` / `k` | Move rows or scroll preview |
+| `gg` / `G` | First / last row or preview position (`gg` within 0.7 seconds) |
+| `Enter` | Preview selected News, CVE, or Priority record |
+| `Esc` | Close preview/help and restore previous focus |
+| `?` | Context-aware keyboard help |
+| `e` | Export selected/previewed record to Markdown |
+
+Arrow keys and Tab/Shift+Tab retain native behavior. Letter shortcuts do not
+intercept text inputs. News previews show publisher excerpts, not generated
+summaries; CVE briefs show stored, sourced facts. Previews remain tied to their
+record while background sync refreshes the tables. `o`/`y` target the preview's URL.
+
+Exports default to `~/Documents/CVEDeck/exports`. Change **Export directory** in
+Settings (`export_dir` in TOML); use `~/...` or an absolute path, never a relative
+path. The directory is created only when exporting. Each export creates a new
+ID-and-timestamp-named Markdown file without overwriting existing files. It includes
+source links and an export timestamp, never configuration, API keys, or raw JSON.
+Changing the directory affects future exports only.
+
+Sync progress shows source stages, known processed counts, elapsed time, and
+errors, never an estimated percentage. CLI progress goes to stderr; the final
+summary stays on stdout. The TUI's source-health strip shows last successful sync
+and errors; a recent sync does not guarantee upstream completeness. Quitting
+interrupts background sync; interrupted work is not reported as complete.
 
 The Settings tab validates and atomically writes the same TOML file users may edit manually.
 

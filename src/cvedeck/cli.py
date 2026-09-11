@@ -8,7 +8,11 @@ from pathlib import Path
 from . import __version__
 from .config import config_path, data_path, load_settings
 from .db import Database
-from .sync import sync_database
+from .sync import SyncProgress, sync_database
+
+
+def _report_progress(event: SyncProgress) -> None:
+    print(f"sync: {event}", file=sys.stderr, flush=True)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -54,7 +58,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "sync":
         db = Database(database)
         try:
-            result = asyncio.run(sync_database(db, settings, database, args.notify))
+            result = asyncio.run(sync_database(db, settings, database, args.notify,
+                                               progress=_report_progress))
         except RuntimeError as error:
             print(str(error), file=sys.stderr)
             return 2

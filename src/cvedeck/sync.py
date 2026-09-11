@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -16,6 +17,32 @@ from .secrets import resolve_key
 from .sources import FEEDS, SourceClient
 
 Clock = Callable[[], datetime]
+ProgressCallback = Callable[["SyncProgress"], None]
+
+
+@dataclass(frozen=True)
+class SyncProgress:
+    """One progress event from a running sync.
+
+    status is "running" (emitted before each blocking fetch, and again with
+    count as records complete), then "success" or "error" per source, and a
+    final "complete" for the whole sync. count is the genuine processed total
+    where known, never a percentage. Cancellation emits no "complete".
+    """
+
+    source: str
+    status: str
+    count: int | None = None
+    elapsed: float = 0.0
+    error: str | None = None
+
+    def __str__(self) -> str:
+        text = f"{self.source} {self.status}"
+        if self.count is not None:
+            text += f" {self.count} records"
+        if self.error:
+            text += f": {self.error}"
+        return f"{text} ({self.elapsed:.1f}s)"
 
 
 @dataclass
@@ -57,12 +84,28 @@ def _parse_date(value: str | None) -> datetime | None:
 
 class Synchronizer:
     def __init__(self, db: Database, settings: Settings, client: SourceClient,
-                 lock_path: Path, clock: Clock = utc_now):
+                 lock_path: Path, clock: Clock = utc_now,
+                 progress: ProgressCallback | None = None):
         self.db = db
         self.settings = settings
         self.client = client
         self.lock_path = lock_path
         self.clock = clock
+        self.progress = progress
+        self._stage_start = 0.0
+        self._run_start = 0.0
+
+    def _begin(self, source: str) -> None:
+        self._stage_start = time.monotonic()
+        self._emit(source, "running")
+
+    def _emit(self, source: str, status: str, count: int | None = None,
+              error: str | None = None) -> None:
+        if self.progress is None:
+            return
+        self.progress(SyncProgress(source=source, status=status, count=count,
+                                   elapsed=time.monotonic() - self._stage_start,
+                                   error=error))
 
     def _first_run(self) -> bool:
         return not self.db.rows("SELECT 1 FROM sync_state WHERE source='kev' AND last_success_at IS NOT NULL")
@@ -89,11 +132,13 @@ class Synchronizer:
         result = SyncResult()
         now_dt = self.clock()
         now = _iso(now_dt)
+        self._run_start = self._stage_start = time.monotonic()
         first_run = self._first_run()
         hydrate_ids: set[str] = set()
         previous_scores: dict[str, float | None] = {}
 
         try:
+            self._begin("kev")
             kev_items = parse_kev(await self.client.kev())
             recent_cutoff = now_dt - timedelta(days=7)
             with self.db.transaction():
@@ -106,8 +151,10 @@ class Synchronizer:
                         hydrate_ids.add(item["cve_id"])
                 self._state("kev", now)
             result.kev_entries = len(kev_items)
+            self._emit("kev", "success", len(kev_items))
         except Exception as error:  # noqa: BLE001 -- isolate upstream failure
             result.errors["kev"] = str(error)
+            self._emit("kev", "error", error=str(error))
             with self.db.transaction():
                 self._state("kev", now, str(error))
 
@@ -116,6 +163,7 @@ class Synchronizer:
             previous_scores[cve_id] = float(previous["score"]) if previous else None
 
         try:
+            self._begin("nvd")
             nvd_records = parse_nvd_page(await self.client.nvd_since(self._last_nvd_sync(now_dt)))
             with self.db.transaction():
                 for record in nvd_records:
@@ -130,8 +178,10 @@ class Synchronizer:
                     hydrate_ids.add(cve_id)
                 self._state("nvd", now)
             result.discovered = len(nvd_records)
+            self._emit("nvd", "success", len(nvd_records))
         except Exception as error:  # noqa: BLE001 -- isolate upstream failure
             result.errors["nvd"] = str(error)
+            self._emit("nvd", "error", error=str(error))
             with self.db.transaction():
                 self._state("nvd", now, str(error))
 
@@ -144,7 +194,18 @@ class Synchronizer:
                 except Exception as error:  # noqa: BLE001 -- isolate upstream failure
                     return cve_id, error
 
-        fetched = await asyncio.gather(*(fetch_record(cve_id) for cve_id in sorted(hydrate_ids)))
+        self._begin("cve_program")
+        fetched: list[tuple[str, dict[str, Any] | Exception]] = []
+        tasks = [asyncio.create_task(fetch_record(cve_id)) for cve_id in sorted(hydrate_ids)]
+        try:
+            for done, awaited in enumerate(asyncio.as_completed(tasks), start=1):
+                fetched.append(await awaited)
+                self._emit("cve_program", "running", count=done)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
         failures = 0
         with self.db.transaction():
             for cve_id, fetched_record in fetched:
@@ -169,6 +230,10 @@ class Synchronizer:
             self._state("cve_program", now, f"{failures} record(s) failed" if failures else None)
         if failures:
             result.errors["cve_program"] = f"{failures} record(s) failed"
+            self._emit("cve_program", "error", result.hydrated,
+                       f"{failures} record(s) failed")
+        else:
+            self._emit("cve_program", "success", result.hydrated)
 
         enabled = {
             "krebs": self.settings.feeds.krebs,
@@ -178,6 +243,7 @@ class Synchronizer:
         for source in FEEDS:
             if not enabled[source]:
                 continue
+            self._begin(f"feed:{source}")
             try:
                 articles = parse_feed(source, await self.client.feed(source), now)
                 with self.db.transaction():
@@ -189,8 +255,10 @@ class Synchronizer:
                             self.db.link_article(article_id, cve_id)
                     self._state(f"feed:{source}", now)
                 result.articles += len(articles)
+                self._emit(f"feed:{source}", "success", len(articles))
             except Exception as error:  # noqa: BLE001 -- isolate upstream failure
                 result.errors[f"feed:{source}"] = str(error)
+                self._emit(f"feed:{source}", "error", error=str(error))
                 with self.db.transaction():
                     self._state(f"feed:{source}", now, str(error))
 
@@ -205,6 +273,8 @@ class Synchronizer:
                             "notifications", "desktop notification delivery failed"
                         )
                         break
+        self._stage_start = self._run_start  # complete event covers the whole run
+        self._emit("sync", "complete")
         return result
 
 
@@ -213,7 +283,9 @@ def default_lock_path(database_path: Path) -> Path:
 
 
 async def sync_database(db: Database, settings: Settings, database_path: Path,
-                        notify: bool = False) -> SyncResult:
+                        notify: bool = False,
+                        progress: ProgressCallback | None = None) -> SyncResult:
     api_key, _source = resolve_key()
     async with SourceClient(api_key) as client:
-        return await Synchronizer(db, settings, client, default_lock_path(database_path)).run(notify)
+        return await Synchronizer(db, settings, client, default_lock_path(database_path),
+                                  progress=progress).run(notify)

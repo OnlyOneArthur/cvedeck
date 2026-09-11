@@ -9,6 +9,8 @@ from typing import Any
 
 import tomli_w
 
+from .export import resolve_export_dir
+
 
 @dataclass(frozen=True)
 class FeedSettings:
@@ -23,6 +25,7 @@ class Settings:
     startup_sync_interval_hours: int = 0
     desktop_notifications: bool = False
     feeds: FeedSettings = field(default_factory=FeedSettings)
+    export_dir: str = "~/Documents/CVEDeck/exports"
 
 
 def config_path() -> Path:
@@ -36,7 +39,10 @@ def data_path() -> Path:
 
 
 def _validate(raw: dict[str, Any]) -> Settings:
-    allowed = {"critical_cvss", "startup_sync_interval_hours", "desktop_notifications", "feeds"}
+    allowed = {
+        "critical_cvss", "startup_sync_interval_hours", "desktop_notifications",
+        "feeds", "export_dir",
+    }
     unknown = set(raw) - allowed
     if unknown:
         raise ValueError(f"Unknown settings: {', '.join(sorted(unknown))}")
@@ -49,6 +55,13 @@ def _validate(raw: dict[str, Any]) -> Settings:
         raise ValueError("startup_sync_interval_hours must be non-negative")
     if not isinstance(notify, bool):
         raise TypeError("desktop_notifications must be boolean")
+    export_dir = raw.get("export_dir", "~/Documents/CVEDeck/exports")
+    if not isinstance(export_dir, str):
+        raise TypeError("export_dir must be a string")
+    try:
+        resolve_export_dir(export_dir)
+    except ValueError as error:
+        raise ValueError(f"export_dir {error}") from error
     feed_raw = raw.get("feeds", {})
     if not isinstance(feed_raw, dict):
         raise TypeError("feeds must be a table")
@@ -62,7 +75,7 @@ def _validate(raw: dict[str, Any]) -> Settings:
         if not isinstance(value, bool):
             raise TypeError(f"feeds.{name} must be boolean")
         values[name] = value
-    return Settings(score, interval, notify, FeedSettings(**values))
+    return Settings(score, interval, notify, FeedSettings(**values), export_dir)
 
 
 def load_settings(path: Path | None = None) -> Settings:
@@ -86,6 +99,7 @@ def save_settings(settings: Settings, path: Path | None = None) -> None:
             "the_hacker_news": settings.feeds.the_hacker_news,
             "securityweek": settings.feeds.securityweek,
         },
+        "export_dir": settings.export_dir,
     }
     encoded = tomli_w.dumps(data).encode()
     descriptor, temporary = tempfile.mkstemp(prefix=".config-", dir=target.parent)
