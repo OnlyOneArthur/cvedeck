@@ -2,7 +2,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from textual.widgets import DataTable, Input, Static
+from textual.widgets import Button, DataTable, Input, Static
 
 from cvedeck.cli import main
 from cvedeck.config import load_settings
@@ -51,6 +51,34 @@ async def test_tui_smoke_filter_and_settings_round_trip(tmp_path: Path) -> None:
         await pilot.pause()
         assert "saved" in str(app.query_one("#settings-status", Static).render()).lower()
     assert load_settings(config).critical_cvss == 8.5
+
+
+@pytest.mark.asyncio
+async def test_tui_api_key_save_and_remove(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_root = tmp_path / "config"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_root))
+    monkeypatch.delenv("NVD_API_KEY", raising=False)
+    app = CVEDeckApp(tmp_path / "db.sqlite", tmp_path / "config.toml")
+    async with app.run_test() as pilot:
+        field = app.query_one("#api-key", Input)
+        field.value = "tui-key-1"
+        app.query_one("#api-save", Button).press()
+        await pilot.pause()
+        assert "configured (cvedeck secret file)" in str(
+            app.query_one("#api-key-status", Static).render()
+        ).lower()
+        stored = (config_root / "cvedeck" / ".env").read_text(encoding="utf-8")
+        assert "tui-key-1" in stored
+        import stat as stat_module
+        assert stat_module.S_IMODE((config_root / "cvedeck" / ".env").stat().st_mode) == 0o600
+        assert field.value == ""
+        app.query_one("#api-remove", Button).press()
+        await pilot.pause()
+        assert "not configured" in str(
+            app.query_one("#api-key-status", Static).render()
+        ).lower()
+        env_file = config_root / "cvedeck" / ".env"
+        assert not env_file.exists() or "tui-key-1" not in env_file.read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio

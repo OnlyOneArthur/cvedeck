@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -13,6 +12,7 @@ from .db import Database
 from .locking import SyncLock
 from .notifications import desktop_notify
 from .parsers import extract_cve_ids, parse_cve_record, parse_feed, parse_kev, parse_nvd_page
+from .secrets import resolve_key
 from .sources import FEEDS, SourceClient
 
 Clock = Callable[[], datetime]
@@ -214,5 +214,6 @@ def default_lock_path(database_path: Path) -> Path:
 
 async def sync_database(db: Database, settings: Settings, database_path: Path,
                         notify: bool = False) -> SyncResult:
-    async with SourceClient(os.environ.get("NVD_API_KEY")) as client:
+    api_key, _source = resolve_key()
+    async with SourceClient(api_key) as client:
         return await Synchronizer(db, settings, client, default_lock_path(database_path)).run(notify)

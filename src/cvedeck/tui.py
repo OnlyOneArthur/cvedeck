@@ -26,6 +26,7 @@ from textual.widgets import (
 
 from .config import FeedSettings, Settings, load_settings, save_settings
 from .db import Database
+from .secrets import remove_key, resolve_key, save_key
 from .sync import sync_database
 
 
@@ -38,6 +39,8 @@ class CVEDeckApp(App[None]):
     .setting { height: 3; }
     .setting Label { width: 32; content-align: left middle; }
     .setting Input { width: 20; }
+    #api-key { width: 34; }
+    #api-save, #api-remove { height: 1; margin-right: 2; }
     #settings-status { height: 3; }
     """
     BINDINGS: ClassVar = [
@@ -77,6 +80,15 @@ class CVEDeckApp(App[None]):
                     with Horizontal(classes="setting"):
                         yield Label("Desktop notifications")
                         yield Switch(self.settings.desktop_notifications, id="desktop-notifications")
+                    with Horizontal(classes="setting"):
+                        yield Label("NVD API key")
+                        yield Input(
+                            placeholder="paste key (stored in CVEDeck .env)",
+                            id="api-key", password=True,
+                        )
+                        yield Button("Save key", id="api-save")
+                        yield Button("Remove key", id="api-remove")
+                        yield Static(self._api_key_status(), id="api-key-status")
                     for label, widget_id, value in (
                         ("Krebs on Security", "feed-krebs", self.settings.feeds.krebs),
                         ("The Hacker News", "feed-thn", self.settings.feeds.the_hacker_news),
@@ -139,6 +151,10 @@ class CVEDeckApp(App[None]):
     def action_focus_search(self) -> None:
         self.query_one("#search", Input).focus()
 
+    def _api_key_status(self) -> str:
+        _key, source = resolve_key()
+        return f"Status: {source}"
+
     def _selected_url(self) -> str | None:
         for table_id in ("priority", "cves", "news"):
             table = self.query_one(f"#{table_id}", DataTable)
@@ -184,6 +200,32 @@ class CVEDeckApp(App[None]):
             self.query_one("#settings-status", Static).update("Settings saved atomically.")
         except (TypeError, ValueError, OSError) as error:
             self.query_one("#settings-status", Static).update(f"Invalid settings: {error}")
+
+    @on(Button.Pressed, "#api-save")
+    def save_api_key(self) -> None:
+        field = self.query_one("#api-key", Input)
+        try:
+            save_key(field.value)
+        except (ValueError, OSError) as error:
+            self.query_one("#api-key-status", Static).update(f"Key not saved: {error}")
+            return
+        field.value = ""
+        self.query_one("#api-key-status", Static).update(
+            "Status: Configured (CVEDeck secret file)"
+        )
+
+    @on(Button.Pressed, "#api-remove")
+    def remove_api_key(self) -> None:
+        try:
+            removed = remove_key()
+        except OSError as error:
+            self.query_one("#api-key-status", Static).update(f"Key not removed: {error}")
+            return
+        self.query_one("#api-key", Input).value = ""
+        status = "Status: Configured (environment)" if resolve_key()[0] else "Status: Not configured"
+        if removed and resolve_key()[0]:
+            status += " (stored key removed)"
+        self.query_one("#api-key-status", Static).update(status)
 
     @on(DataTable.RowHighlighted)
     def show_detail(self, event: DataTable.RowHighlighted) -> None:
