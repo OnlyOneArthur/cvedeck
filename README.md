@@ -1,5 +1,7 @@
 # CVEDeck
 
+[![CI](https://github.com/OnlyOneArthur/cvedeck/actions/workflows/ci.yml/badge.svg)](https://github.com/OnlyOneArthur/cvedeck/actions/workflows/ci.yml)
+
 CVEDeck is a local Linux terminal dashboard for prioritizing authoritative CVE records, CISA Known Exploited Vulnerabilities (KEV), and security-news metadata. It is designed for learners and developers who want a clear, inspectable view without accounts, telemetry, scraping article pages, or AI-generated summaries.
 
 ![CVEDeck TUI showing synthetic fixture data](docs/assets/cvedeck.svg)
@@ -92,6 +94,7 @@ The Settings tab validates and atomically writes the same TOML file users may ed
 critical_cvss = 9.0
 startup_sync_interval_hours = 0
 desktop_notifications = false
+export_dir = "~/Documents/CVEDeck/exports"
 
 [feeds]
 krebs = true
@@ -99,13 +102,21 @@ the_hacker_news = true
 securityweek = true
 ```
 
-An interval of `0` means sync on every TUI launch. The NVD API key is environment-only:
+An interval of `0` means sync on every TUI launch. Anonymous NVD access works,
+but synchronization is slower because rate limits are respected. Configure an
+optional NVD API key in either of these ways:
 
 ```bash
 export NVD_API_KEY='your-key'
 ```
 
-It is never written to TOML or SQLite. Anonymous NVD access works more slowly because rate limits are respected.
+The process environment takes precedence. Alternatively, enter the key in the
+TUI Settings tab and choose **Save key**. CVEDeck stores it at
+`$XDG_CONFIG_HOME/cvedeck/.env` (normally `~/.config/cvedeck/.env`) with `0600`
+permissions. **Remove key** deletes the stored entry but does not modify the
+process environment. The key is never written to TOML, SQLite, status output,
+or exports. The secret file protects against access by other local users, but
+not against software already running as your user.
 
 Data lives at `~/.local/share/cvedeck/cvedeck.db`. XDG environment variables are honored.
 

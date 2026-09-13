@@ -54,6 +54,22 @@ async def test_tui_smoke_filter_and_settings_round_trip(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_tui_displays_zero_cvss_score(tmp_path: Path) -> None:
+    database = tmp_path / "db.sqlite"
+    db = Database(database)
+    with db.transaction():
+        db.upsert_cve({"cve_id": "CVE-2026-0000", "hydrated": True}, NOW)
+        db.replace_metrics("CVE-2026-0000", "CNA", [{"version": "4.0", "score": 0.0}])
+    db.close()
+
+    app = CVEDeckApp(database, tmp_path / "config.toml", offline=True)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        row = app.query_one("#cves", DataTable).get_row("cve:CVE-2026-0000")
+        assert row[2] == 0.0
+
+
+@pytest.mark.asyncio
 async def test_tui_api_key_save_and_remove(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_root = tmp_path / "config"
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config_root))
