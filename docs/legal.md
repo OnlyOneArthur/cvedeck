@@ -8,7 +8,7 @@ CVE records are retrieved from the CVE Program API. `CVE` and the CVE logo are r
 
 ## NVD
 
-This product uses data from the NVD API but is not endorsed or certified by the NVD. See https://nvd.nist.gov/developers/terms-of-use . An API key is optional and remains environment-only.
+This product uses data from the NVD API but is not endorsed or certified by the NVD. See https://nvd.nist.gov/developers/terms-of-use . An API key is optional and may be supplied through the process environment or CVEDeck's user-readable-only secret file. It is not stored in TOML, SQLite, status output, or exports.
 
 ## CISA KEV
 

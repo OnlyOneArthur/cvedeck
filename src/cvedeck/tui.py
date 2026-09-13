@@ -446,7 +446,8 @@ class CVEDeckApp(App[None]):
                 continue
             if filters.get("before") and published > filters["before"]:
                 continue
-            values = (row["cve_id"], "Yes" if row["is_kev"] else "No", row["score"] or "—",
+            values = (row["cve_id"], "Yes" if row["is_kev"] else "No",
+                      row["score"] if row["score"] is not None else "—",
                       f"{row['source']} {row['version']}" if row["source"] else "—",
                       (row["published_at"] or "—")[:10],
                       Text(row["description"] or "Not yet available"))
